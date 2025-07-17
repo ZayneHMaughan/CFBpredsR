@@ -1,50 +1,22 @@
----
-output: github_document
----
 
 <!-- README.md is generated from README.Rmd. Please edit that file -->
-
-```{r, include = FALSE}
-knitr::opts_chunk$set(
-  collapse = TRUE,
-  comment = "#>",
-  fig.path = "man/figures/README-",
-  out.width = "100%"
-)
-```
 
 # cfbpredsr
 
 <!-- badges: start -->
+
 <!-- badges: end -->
 
-The goal of cfbpredsr is to ...
+The goal of cfbpredsr is to …
 
 ## Installation
 
-You can install the development version of cfbpredsr from [GitHub](https://github.com/) with:
+You can install the development version of cfbpredsr from
+[GitHub](https://github.com/) with:
 
 ``` r
 # install.packages("pak")
 pak::pak("ZayneHMaughan/CFBpredsR")
-```
-
-```{r setup, include=FALSE}
-# library(cfbpredsr)
-library(factoextra)
-library(dplyr)
-library(caret)
-library(themis)
-library(xgboost)
-library(Metrics)
-library(recipes)
-library(cfbfastR)
-library(DALEX)
-library(doParallel)
-library(yardstick)
-```
-```{r, echo=FALSE}
-load("data-raw/CFB.RData")
 ```
 
 ### Introduction:
@@ -68,9 +40,10 @@ schedule, and conference champions. The main task of this analysis is to
 create a predictive classification model that predicts which four teams
 would make it to the playoffs.
 
-\*\*\* Note: the playoff model changed in 2024. It now has 12 teams competing for 
-the national title. I did not change this for the final year of data. I instead 
-included the final four teams from the 2024 playoff. 
+\*\*\* Note: the playoff model changed in 2024. It now has 12 teams
+competing for the national title. I did not change this for the final
+year of data. I instead included the final four teams from the 2024
+playoff.
 
 ### DATA:
 
@@ -88,7 +61,7 @@ for each team over the course of a given team.
 These queries were used along with some other feature engineering as
 follows:
 
-```{r, eval=FALSE}
+``` r
 get_ranked_wins_all_teams <- function(year) {
   # Preload all game stats and rankings for the season
   all_weekly_games <- purrr::map_dfr(1:13, function(week_num) {
@@ -186,23 +159,21 @@ This can be seen in the modeling section.
 #### EDA
 
 The combined seasonal statistics produced a data table with 115
-variables and 1298 observations. Since the size is so large it would be hard to 
-visualize all variables.
-Here is a summary of the first 5 predictors: 
-```{r, echo=FALSE}
-# excluding Team, Season, and Conference
-summary(modeling_data[, 3:5])
-```
+variables and 1298 observations. Since the size is so large it would be
+hard to visualize all variables. Here is a summary of the first 5
+predictors:
+
+    #>  conference.x         off_plays        off_drives 
+    #>  Length:1298        Min.   : 613.0   Min.   :112  
+    #>  Class :character   1st Qu.: 821.2   1st Qu.:149  
+    #>  Mode  :character   Median : 881.0   Median :158  
+    #>                     Mean   : 884.7   Mean   :159  
+    #>                     3rd Qu.: 947.0   3rd Qu.:168  
+    #>                     Max.   :1231.0   Max.   :212
 
 Visualizing the response variable:
 
-```{r, echo=FALSE}
-hist(as.numeric(modeling_data$playoff),
-  main = "Playoff (as numeric)",
-  xlab = "Playoff (0 = False, 1 = True)"
-)
-```
-
+<img src="man/figures/README-unnamed-chunk-5-1.png" width="100%" />
 
 #### Correlation
 
@@ -211,7 +182,7 @@ to try. I decided to try and do PCA on the numeric predictors. This
 would have been everything besides the team name, the conference, and
 the response variable.
 
-```{r}
+``` r
 pca_data <- modeling_data %>%
   select(-c("playoff", "conference.x", "conference.y", "team"))
 
@@ -220,24 +191,28 @@ pca <- princomp(scale(pca_data))
 fviz_eig(pca, addlabels = TRUE)
 ```
 
+<img src="man/figures/README-unnamed-chunk-6-1.png" width="100%" />
+
 I wanted to see if the conducting PCA on the data showed there was a few
 dimensions that described over 90% of the variance. However, looking at
 this graph one can see that the variance still carried over many
 dimensions and could be reduced but not by much. Still, I wanted to see
 if there were any important variables that I could keep.
 
-```{r}
+``` r
 fviz_cos2(pca, choice = "var")
 ```
 
+<img src="man/figures/README-unnamed-chunk-7-1.png" width="100%" />
+
 There are a few that do not seem to add much importance to the first
-dimension in terms of their cosine squared value. I started to remove some of those
-that did not add much benefit. 
+dimension in terms of their cosine squared value. I started to remove
+some of those that did not add much benefit.
 
-I also checked certain variables that are highly correlated and removed some of those
-from the training data. 
+I also checked certain variables that are highly correlated and removed
+some of those from the training data.
 
-```{r}
+``` r
 ##########################
 
 # Example correlation matrix
@@ -263,17 +238,31 @@ names(high_cor_values) <- apply(high_cor_indices, 1, function(idx) {
 
 # View the named vector
 print(head(high_cor_values))
+#>                             off_ppa - off_total_ppa 
+#>                                           0.9814672 
+#>                          off_ppa - off_success_rate 
+#>                                           0.8781833 
+#>                    off_total_ppa - off_success_rate 
+#>                                           0.8884393 
+#>                       off_stuff_rate - off_line_yds 
+#>                                          -0.8337215 
+#>       off_line_yds_total - off_second_lvl_yds_total 
+#>                                           0.9151386 
+#> off_second_lvl_yds_total - off_open_field_yds_total 
+#>                                           0.8309204
 ```
 
 #### Modeling
-One large issue that arose when trying to predict the final four teams or the four teams that
-would make it to the playoffs is that there are 134 teams and only four
-make it. This naturally causes imbalanced classes for prediction. One
-method that has been discussed has been SMOTE. I decided to implement
-this methodology to create greater balance between the classes. This
-implementation was made smooth by the $\bf{recipes}$ package.
 
-```{r, eval}
+One large issue that arose when trying to predict the final four teams
+or the four teams that would make it to the playoffs is that there are
+134 teams and only four make it. This naturally causes imbalanced
+classes for prediction. One method that has been discussed has been
+SMOTE. I decided to implement this methodology to create greater balance
+between the classes. This implementation was made smooth by the
+$\bf{recipes}$ package.
+
+``` r
 # Split the data into training and test sets.
 train_data <- modeling_data |>
   dplyr::filter(!season.x %in% c(2023, 2024)) |>
@@ -284,10 +273,10 @@ test_data <- modeling_data |>
   dplyr::select(-c(conference.x, conference.y))
 ```
 
-After splitting the data, I created a "recipe" to be used for SMOTE and
+After splitting the data, I created a “recipe” to be used for SMOTE and
 the train and test sets for the modeling.
 
-```{r, eval=FALSE}
+``` r
 ######################## SMOTE FOR THE DATA AND THE MODEL ######################
 smote_subset_recipe <- recipe(playoff ~ ., data = train_data) |>
   update_role(team, new_role = "id") |>
@@ -335,7 +324,8 @@ regression, and decision trees were also chosen due to interpretability
 and as a baseline for the predictions.
 
 XGBoost:
-```{r,eval=FALSE}
+
+``` r
 # Detect number of cores and create cluster
 cl <- makeCluster(parallel::detectCores() - 1) # Leave 1 core free
 registerDoParallel(cl)
@@ -373,8 +363,10 @@ xgb_sub_model <- train(playoff ~ .,
 stopCluster(cl)
 registerDoSEQ()
 ```
+
 Support Vector Machine
-```{r, eval = FALSE}
+
+``` r
 # Detect number of cores and create cluster
 cl <- makeCluster(parallel::detectCores() - 1) # Leave 1 core free
 registerDoParallel(cl)
@@ -408,7 +400,8 @@ registerDoSEQ()
 ```
 
 Random Forest:
-```{r, eval= FALSE}
+
+``` r
 # Detect number of cores and create cluster
 cl <- makeCluster(parallel::detectCores() - 1) # Leave 1 core free
 registerDoParallel(cl)
@@ -442,8 +435,10 @@ rf_sub_model <- train(playoff ~ .,
 stopCluster(cl)
 registerDoSEQ()
 ```
+
 K-Nearest Neighbors:
-```{r, eval=FALSE}
+
+``` r
 cl <- makeCluster(parallel::detectCores() - 1) # Leave 1 core free
 registerDoParallel(cl)
 
@@ -473,8 +468,10 @@ knn_sub_model <- train(playoff ~ .,
 stopCluster(cl)
 registerDoSEQ()
 ```
+
 Logistic Regression Regularized with LASSO:
-```{r, eval= FALSE}
+
+``` r
 # Detect number of cores and create cluster
 cl <- makeCluster(parallel::detectCores() - 1) # Leave 1 core free
 registerDoParallel(cl)
@@ -505,8 +502,10 @@ lasso_sub_model <- train(playoff ~ .,
 stopCluster(cl)
 registerDoSEQ()
 ```
+
 Decision Tree:
-```{r, eval = FALSE}
+
+``` r
 cl <- makeCluster(parallel::detectCores() - 1) # Leave 1 core free
 registerDoParallel(cl)
 
@@ -536,39 +535,78 @@ models can be seen in the following section.
 
 The performance of the models is as follows:
 
-```{r, echo=FALSE}
-# get_metrics is a created function
-bind_rows(
-  get_metrics(xgb_sub_model, smote_test, playoff, "XGboost"),
-  get_metrics(svm_sub_model, smote_test, playoff, "SVM"),
-  get_metrics(rf_sub_model, smote_test, playoff, "Random Forest"),
-  get_metrics(knn_sub_model, smote_test, playoff, "KNN"),
-  get_metrics(lasso_sub_model, smote_test, playoff, "LASSO"),
-  get_metrics(cart_model, smote_test, playoff, "Decision Tree")
-)
-```
+    #> # A tibble: 6 × 5
+    #>   Model         Accuracy Precision Recall   AUC
+    #>   <chr>            <dbl>     <dbl>  <dbl> <dbl>
+    #> 1 XGboost          0.933     0.954  0.976 0.872
+    #> 2 SVM              0.948     0.954  0.992 0.844
+    #> 3 Random Forest    0.944     0.965  0.976 0.876
+    #> 4 KNN              0.697     0.973  0.700 0.736
+    #> 5 LASSO            0.869     0.982  0.877 0.857
+    #> 6 Decision Tree    0.910     0.956  0.949 0.623
 
-```{r, eval = FALSE, include=FALSE}
-get_metrics <- function(model, newdata, response, model_name) {
-  preds_class <- predict(model, newdata)
-  preds_prob <- predict(model, newdata, type = "prob")[, "True"]
+The three best performing models are the XGBoost, Random Forest, and SVM
+model. Out of these three, I would say that the Forest performed the
+best. They have the best accuracy as well as the best area under the ROC
+curve.
 
-  truth <- newdata[[deparse(substitute(response))]]
+The variable and permutation importance for those three models are as
+follows:
 
- 
-}
-```
-
-The three best performing models are the XGBoost, Random Forest, and SVM model. 
-Out of these three, I would say that the Forest performed the best. They
-have the best accuracy as well as the best area under the ROC curve.
-
-The variable and permutation importance for those three models are as follows:
-
-```{r}
+``` r
 varImp(xgb_sub_model)
+#> xgbTree variable importance
+#> 
+#>   only 20 most important variables shown (out of 58)
+#> 
+#>                                Overall
+#> ranked_wins                    100.000
+#> punt_returns                    27.164
+#> punt_return_yds                 27.025
+#> kick_return_TDs                 22.051
+#> def_field_pos_avg_start         11.945
+#> def_passing_plays_success_rate  11.018
+#> passes_intercepted              10.570
+#> passes_intercepted_yds           8.512
+#> off_rushing_plays_total_ppa      8.049
+#> def_line_yds                     7.316
+#> passes_intercepted_TDs           6.539
+#> interceptions                    6.363
+#> off_field_pos_avg_start          6.130
+#> off_open_field_yds_total         5.075
+#> def_open_field_yds_total         4.909
+#> off_plays                        4.445
+#> def_second_lvl_yds               4.417
+#> off_havoc_db                     4.297
+#> def_passing_plays_rate           4.287
+#> def_total_ppa                    4.246
 
 varImp(rf_sub_model)
+#> ranger variable importance
+#> 
+#>   only 20 most important variables shown (out of 58)
+#> 
+#>                                 Overall
+#> punt_return_yds                  100.00
+#> ranked_wins                       97.41
+#> punt_returns                      76.58
+#> def_passing_plays_success_rate    59.58
+#> def_total_ppa                     58.46
+#> def_field_pos_avg_start           50.62
+#> def_passing_plays_total_ppa       42.54
+#> def_line_yds                      41.06
+#> off_rushing_plays_total_ppa       38.19
+#> rush_atts                         36.62
+#> def_passing_downs_success_rate    34.87
+#> def_passing_downs_ppa             32.59
+#> def_pts_per_opp                   28.73
+#> passes_intercepted_yds            28.18
+#> off_field_pos_avg_start           27.94
+#> interceptions                     27.06
+#> off_plays                         26.04
+#> off_total_opportunities           25.67
+#> def_second_lvl_yds                24.80
+#> off_standard_downs_success_rate   24.63
 
 explainer <- explain(
   model = svm_sub_model,
@@ -576,19 +614,33 @@ explainer <- explain(
   y = as.numeric(smote_sub_test$playoff == "True"),  # <- FIX here
   label = "SVM"
 )
+#> Preparation of a new explainer is initiated
+#>   -> model label       :  SVM 
+#>   -> data              :  267  rows  58  cols 
+#>   -> data              :  tibble converted into a data.frame 
+#>   -> target variable   :  267  values 
+#>   -> predict function  :  yhat.train  will be used (  default  )
+#>   -> predicted values  :  No value for predict function target column. (  default  )
+#>   -> model_info        :  package caret , ver. 7.0.1 , task classification (  default  ) 
+#>   -> predicted values  :  numerical, min =  3.251555e-11 , mean =  0.01567699 , max =  0.8662533  
+#>   -> residual function :  difference between y and yhat (  default  )
+#>   -> residuals         :  numerical, min =  -0.8467605 , mean =  0.03675746 , max =  1  
+#>   A new explainer has been created!
 
 # Now you can run model_parts
 vi <- model_parts(explainer)
 plot(vi)
 ```
 
+<img src="man/figures/README-unnamed-chunk-18-1.png" width="100%" />
 
 #### Conclusion
-It seems as though the Random Forest was the best model at classifying which four 
-teams made it to the playoffs. Through PCA and correlation analysis, seasonal 
-data can be shrunk and give a good explanation to who would make it to the 
-playoff. It does appear that strength of schedule is a powerful factor into the
-decision making of the playoff committee. However, this may be biased towards 
-who the committee already thinks is good and the rankings may show that. Overall,
-this analysis shows that winning games against good teams will get a team into
-the playoffs.
+
+It seems as though the Random Forest was the best model at classifying
+which four teams made it to the playoffs. Through PCA and correlation
+analysis, seasonal data can be shrunk and give a good explanation to who
+would make it to the playoff. It does appear that strength of schedule
+is a powerful factor into the decision making of the playoff committee.
+However, this may be biased towards who the committee already thinks is
+good and the rankings may show that. Overall, this analysis shows that
+winning games against good teams will get a team into the playoffs.
