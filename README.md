@@ -7,7 +7,8 @@
 
 <!-- badges: end -->
 
-The goal of cfbpredsr is to …
+The goal of cfbpredsr is to create a model to predict and classify which
+teams make it to the playoffs given a year of statistics of any team.
 
 ## Installation
 
