@@ -1,14 +1,9 @@
 ---
-title: "CFB_Analysis"
+title: "College Football Playoff Predictor"
+author: "Zayne Maughan"
 output: github_document
-vignette: >
-  %\VignetteIndexEntry{CFB_Analysis}
-  %\VignetteEncoding{UTF-8}
-  %\VignetteEngine{knitr::rmarkdown}
-editor_options: 
-  markdown: 
-    wrap: 72
 ---
+
 
 ```{r, include = FALSE}
 knitr::opts_chunk$set(
@@ -18,7 +13,7 @@ knitr::opts_chunk$set(
 ```
 
 ```{r setup, include=FALSE}
-#library(cfbpredsr)
+# library(cfbpredsr)
 library(factoextra)
 library(dplyr)
 library(caret)
@@ -28,6 +23,8 @@ library(Metrics)
 library(recipes)
 library(cfbfastR)
 library(DALEX)
+library(doParallel)
+library(yardstick)
 ```
 ```{r, echo=FALSE}
 load("../data-raw/CFB.RData")
@@ -75,17 +72,18 @@ These queries were used along with some other feature engineering as
 follows:
 
 ```{r, eval=FALSE}
-
 get_ranked_wins_all_teams <- function(year) {
   # Preload all game stats and rankings for the season
   all_weekly_games <- purrr::map_dfr(1:13, function(week_num) {
-    week_data <- cfbd_game_team_stats(year, week = week_num, division = "fbs")  |>
-      dplyr::filter(conference %in% c("American Athletic",
-                                      "FBS Indepenents", "Big 12",  "SEC", "ACC",
-                                      "Conference USA", "Pac-12", "Southern",
-                                      "Sun Belt", "Big Ten", "Mountain West",
-                                      "Mid-American"))
-    week_data$week <- week_num  # Add week for later filtering
+    week_data <- cfbd_game_team_stats(year, week = week_num, division = "fbs") |>
+      dplyr::filter(conference %in% c(
+        "American Athletic",
+        "FBS Indepenents", "Big 12", "SEC", "ACC",
+        "Conference USA", "Pac-12", "Southern",
+        "Sun Belt", "Big Ten", "Mountain West",
+        "Mid-American"
+      ))
+    week_data$week <- week_num # Add week for later filtering
     week_data
   })
 
@@ -101,7 +99,7 @@ get_ranked_wins_all_teams <- function(year) {
       result = points > points_allowed,
       ranked_win = as.integer(result & opponent %in% all_rankings$school)
     ) |>
-    dplyr::group_by(school)|>
+    dplyr::group_by(school) |>
     dplyr::summarise(ranked_wins = sum(ranked_win, na.rm = TRUE), .groups = "drop")
 }
 
@@ -115,7 +113,7 @@ full_data <- purrr::map_dfr(c(2014:2019, 2021:2024), function(year) {
   ranked_wins_df <- get_ranked_wins_all_teams(year)
 
   dplyr::inner_join(adv_stats, team_stats, by = "team") |>
-    dplyr::left_join(ranked_wins_df, by = c("team" ="school")) |>
+    dplyr::left_join(ranked_wins_df, by = c("team" = "school")) |>
     dplyr::mutate(ranked_wins = tidyr::replace_na(ranked_wins, 0))
 })
 
@@ -124,7 +122,7 @@ playoffs_2015 <- c("Clemson", "Alabama", "Michigan State", "Oklahoma")
 playoffs_2016 <- c("Alabama", "Clemson", "Ohio State", "Washington")
 playoffs_2017 <- c("Clemson", "Georgia", "Oklahoma", "Alabama")
 playoffs_2018 <- c("Alabama", "Clemson", "Notre Dame", "Oklahoma")
-playoffs_2019 <- c("LSU", "Ohio State",  "Clemson", "Oklahoma")
+playoffs_2019 <- c("LSU", "Ohio State", "Clemson", "Oklahoma")
 playoffs_2021 <- c("Alabama", "Michigan", "Georgia", "Cincinnati")
 playoffs_2022 <- c("Georgia", "Michigan", "TCU", "Ohio State")
 playoffs_2023 <- c("Michigan", "Washington", "Texas", "Alabama")
@@ -148,13 +146,16 @@ full_data |>
     )
   ) -> full_data
 
-#There were some NAs that could be added with a zero padded statistic
-modeling_data <- full_data  %>%
-  tidyr::replace_na(list(passes_intercepted = c(0),
-                         passes_intercepted_yds = c(0),
-                         passes_intercepted_TDs = 0)) |>
+# There were some NAs that could be added with a zero padded statistic
+modeling_data <- full_data %>%
+  tidyr::replace_na(list(
+    passes_intercepted = c(0),
+    passes_intercepted_yds = c(0),
+    passes_intercepted_TDs = 0
+  )) |>
   dplyr::mutate(playoff = factor(ifelse(playoff == 1, "True", "False"),
-                          levels = c("False","True")))
+    levels = c("False", "True")
+  ))
 ```
 
 There was not a cohesive strength of schedule ranking or list. Playing
@@ -172,13 +173,17 @@ variables and 1298 observations. Since the size is so large it would be hard to
 visualize all variables.
 Here is a summary of the first 5 predictors: 
 ```{r, echo=FALSE}
-#excluding Team, Season, and Conference
-summary(modeling_data[,3:5])
+# excluding Team, Season, and Conference
+summary(modeling_data[, 3:5])
 ```
 
 Visualizing the response variable:
+
 ```{r, echo=FALSE}
-hist(modeling_data$playoff)
+hist(as.numeric(modeling_data$playoff),
+  main = "Playoff (as numeric)",
+  xlab = "Playoff (0 = False, 1 = True)"
+)
 ```
 
 
@@ -190,9 +195,8 @@ would have been everything besides the team name, the conference, and
 the response variable.
 
 ```{r}
-
 pca_data <- modeling_data %>%
-  select(-c("playoff","conference.x", "conference.y","team"))
+  select(-c("playoff", "conference.x", "conference.y", "team"))
 
 pca <- princomp(scale(pca_data))
 
@@ -213,7 +217,7 @@ There are a few that do not seem to add much importance to the first
 dimension in terms of their cosine squared value. I started to remove some of those
 that did not add much benefit. 
 
-I also check certain variables that are highly correlated and removed some of those
+I also checked certain variables that are highly correlated and removed some of those
 from the training data. 
 
 ```{r}
@@ -241,8 +245,7 @@ names(high_cor_values) <- apply(high_cor_indices, 1, function(idx) {
 })
 
 # View the named vector
-print(high_cor_values)
-
+print(head(high_cor_values))
 ```
 
 #### Modeling
@@ -254,8 +257,7 @@ this methodology to create greater balance between the classes. This
 implementation was made smooth by the $\bf{recipes}$ package.
 
 ```{r, eval}
-
-#Split the data into training and test sets. 
+# Split the data into training and test sets.
 train_data <- modeling_data |>
   dplyr::filter(!season.x %in% c(2023, 2024)) |>
   select(-c(conference.x, conference.y))
@@ -268,29 +270,31 @@ test_data <- modeling_data |>
 After splitting the data, I created a "recipe" to be used for SMOTE and
 the train and test sets for the modeling.
 
-```{r, eval=FALSE, echo=FALSE}
+```{r, eval=FALSE}
 ######################## SMOTE FOR THE DATA AND THE MODEL ######################
 smote_subset_recipe <- recipe(playoff ~ ., data = train_data) |>
   update_role(team, new_role = "id") |>
-  step_rm(off_ppa, off_total_ppa, off_field_pos_avg_predicted_points,
-          off_havoc_total,off_success_rate, off_standard_downs_rate,
-          off_rushing_plays_ppa, off_rushing_plays_rate,off_drives,
-          def_drives, def_ppa, def_field_pos_avg_predicted_points,
-          def_havoc_total, def_success_rate,def_standard_downs_rate,
-          def_rushing_plays_ppa, def_rushing_plays_rate,
-          def_passing_downs_total_ppa, def_passing_plays_ppa, season.x,season.y,
-          pass_atts, rush_yds, first_downs, penalty_yds, kick_returns,
-          def_standard_downs_ppa, def_open_field_yds, off_line_yds_total,
-          net_pass_yds, off_open_field_yds, off_passing_plays_ppa,
-          def_standard_downs_success_rate,off_passing_downs_explosiveness,
-          fumbles_lost,
-          off_explosiveness, def_passing_downs_explosiveness,
-          def_explosiveness, def_passing_downs_explosiveness, fourth_downs,
-          def_havoc_front_seven, fourth_down_convs, off_passing_plays_explosiveness,
-          off_rushing_plays_explosiveness, off_standard_downs_explosiveness,
-          def_rushing_plays_explosiveness,kick_return_yds,
-          def_standard_downs_explosiveness, pass_comps, third_downs, penalties,
-          punt_return_TDs, def_havoc_db, off_havoc_front_seven ) |>
+  step_rm(
+    off_ppa, off_total_ppa, off_field_pos_avg_predicted_points,
+    off_havoc_total, off_success_rate, off_standard_downs_rate,
+    off_rushing_plays_ppa, off_rushing_plays_rate, off_drives,
+    def_drives, def_ppa, def_field_pos_avg_predicted_points,
+    def_havoc_total, def_success_rate, def_standard_downs_rate,
+    def_rushing_plays_ppa, def_rushing_plays_rate,
+    def_passing_downs_total_ppa, def_passing_plays_ppa, season.x, season.y,
+    pass_atts, rush_yds, first_downs, penalty_yds, kick_returns,
+    def_standard_downs_ppa, def_open_field_yds, off_line_yds_total,
+    net_pass_yds, off_open_field_yds, off_passing_plays_ppa,
+    def_standard_downs_success_rate, off_passing_downs_explosiveness,
+    fumbles_lost,
+    off_explosiveness, def_passing_downs_explosiveness,
+    def_explosiveness, def_passing_downs_explosiveness, fourth_downs,
+    def_havoc_front_seven, fourth_down_convs, off_passing_plays_explosiveness,
+    off_rushing_plays_explosiveness, off_standard_downs_explosiveness,
+    def_rushing_plays_explosiveness, kick_return_yds,
+    def_standard_downs_explosiveness, pass_comps, third_downs, penalties,
+    punt_return_TDs, def_havoc_db, off_havoc_front_seven
+  ) |>
   step_smote(playoff)
 
 # Prep only once on training data
@@ -314,19 +318,18 @@ regression, and decision trees were also chosen due to interpretability
 and as a baseline for the predictions.
 
 XGBoost:
-```{r, include=FALSE}
-
+```{r,eval=FALSE}
 # Detect number of cores and create cluster
 cl <- makeCluster(parallel::detectCores() - 1) # Leave 1 core free
 registerDoParallel(cl)
 
 xgb_grid <- expand.grid(
-  nrounds = c(100,200),
-  max_depth = c(4,6),
+  nrounds = c(100, 200),
+  max_depth = c(4, 6),
   eta = c(0.1, 1),
   gamma = c(0, 1),
   colsample_bytree = c(0.7, 1),
-  min_child_weight = c(1,2),
+  min_child_weight = c(1, 2),
   subsample = c(0.7, 0.9)
 )
 
@@ -342,11 +345,11 @@ repeated_oob <- trainControl(
 
 
 xgb_sub_model <- train(playoff ~ .,
-               data = smote_sub_train |> select(-team),
-               trControl = repeated_oob,
-               method = "xgbTree",
-               metric = "ROC",
-               tuneGrid = xgb_grid
+  data = smote_sub_train |> select(-team),
+  trControl = repeated_oob,
+  method = "xgbTree",
+  metric = "ROC",
+  tuneGrid = xgb_grid
 )
 
 
@@ -376,16 +379,15 @@ repeated_oob <- trainControl(
 )
 
 svm_sub_model <- train(playoff ~ .,
-                   data = smote_sub_train |> select(-team),
-                   trControl = repeated_oob,
-                   method = "svmRadial",
-                   metric = "ROC",
-                   tuneGrid = svm_grid
+  data = smote_sub_train |> select(-team),
+  trControl = repeated_oob,
+  method = "svmRadial",
+  metric = "ROC",
+  tuneGrid = svm_grid
 )
 
 stopCluster(cl)
 registerDoSEQ()
-
 ```
 
 Random Forest:
@@ -411,21 +413,20 @@ rf_grid <- expand.grid(
 
 set.seed(24)
 rf_sub_model <- train(playoff ~ .,
-                  data = smote_sub_train |> select(-team),
-                  trControl = repeated_oob,
-                  method = "ranger",  # <-- important change here
-                  metric = "ROC",
-                  tuneGrid = rf_grid,
-                  importance = 'impurity'
+  data = smote_sub_train |> select(-team),
+  trControl = repeated_oob,
+  method = "ranger", # <-- important change here
+  metric = "ROC",
+  tuneGrid = rf_grid,
+  importance = "impurity"
 )
 
 
 stopCluster(cl)
 registerDoSEQ()
-
 ```
 K-Nearest Neighbors:
-```{r}
+```{r, eval=FALSE}
 cl <- makeCluster(parallel::detectCores() - 1) # Leave 1 core free
 registerDoParallel(cl)
 
@@ -444,17 +445,16 @@ knn_grid <- expand.grid(
 
 set.seed(24)
 knn_sub_model <- train(playoff ~ .,
-                   data = smote_sub_train |> select(-team),
-                   trControl = repeated_oob,
-                   method = "knn",
-                   metric = "ROC",
-                   tuneGrid = knn_grid
+  data = smote_sub_train |> select(-team),
+  trControl = repeated_oob,
+  method = "knn",
+  metric = "ROC",
+  tuneGrid = knn_grid
 )
 
 
 stopCluster(cl)
 registerDoSEQ()
-
 ```
 Logistic Regression Regularized with LASSO:
 ```{r, eval= FALSE}
@@ -472,26 +472,24 @@ repeated_oob <- trainControl(
 )
 
 lasso_grid <- expand.grid(
-  alpha = 1,                     # 1 = LASSO penalty
-  lambda = c(0.0001, 0.001, 0.01, 0.1, 1)  # different levels of shrinkage
+  alpha = 1, # 1 = LASSO penalty
+  lambda = c(0.0001, 0.001, 0.01, 0.1, 1) # different levels of shrinkage
 )
 
 set.seed(24)
 lasso_sub_model <- train(playoff ~ .,
-                     data = smote_sub_train |> select(-team),
-                     trControl = repeated_oob,
-                     method = "glmnet",
-                     metric = "ROC",
-                     tuneGrid = lasso_grid
+  data = smote_sub_train |> select(-team),
+  trControl = repeated_oob,
+  method = "glmnet",
+  metric = "ROC",
+  tuneGrid = lasso_grid
 )
 
 stopCluster(cl)
 registerDoSEQ()
-
 ```
 Decision Tree:
 ```{r, eval = FALSE}
-
 cl <- makeCluster(parallel::detectCores() - 1) # Leave 1 core free
 registerDoParallel(cl)
 
@@ -501,11 +499,11 @@ cart_grid <- expand.grid(
 
 set.seed(24)
 cart_sub_model <- train(playoff ~ .,
-                    data = smote_sub_train |> select(-team),
-                    trControl = repeated_oob,
-                    method = "rpart",
-                    metric = "ROC",
-                    tuneGrid = cart_grid
+  data = smote_sub_train |> select(-team),
+  trControl = repeated_oob,
+  method = "rpart",
+  metric = "ROC",
+  tuneGrid = cart_grid
 )
 
 
@@ -522,38 +520,30 @@ models can be seen in the following section.
 The performance of the models is as follows:
 
 ```{r, echo=FALSE}
-#get_metrics is a created function
+# get_metrics is a created function
 bind_rows(
   get_metrics(xgb_sub_model, smote_test, playoff, "XGboost"),
-  get_metrics(svm_sub_model, smote_test,playoff, "SVM" ),
-  get_metrics(rf_sub_model, smote_test,playoff, "Random Forest" ),
-  get_metrics(knn_sub_model, smote_test,playoff, "KNN" ),
-  get_metrics(lasso_submodel, smote_test,playoff, "LASSO" ),
-  get_metrics(cart_model, smote_test,playoff, "Decision Tree" )
-
+  get_metrics(svm_sub_model, smote_test, playoff, "SVM"),
+  get_metrics(rf_sub_model, smote_test, playoff, "Random Forest"),
+  get_metrics(knn_sub_model, smote_test, playoff, "KNN"),
+  get_metrics(lasso_sub_model, smote_test, playoff, "LASSO"),
+  get_metrics(cart_model, smote_test, playoff, "Decision Tree")
 )
 ```
 
 ```{r, eval = FALSE, include=FALSE}
 get_metrics <- function(model, newdata, response, model_name) {
-
   preds_class <- predict(model, newdata)
-  preds_prob  <- predict(model, newdata, type = "prob")[, "True"]
+  preds_prob <- predict(model, newdata, type = "prob")[, "True"]
 
   truth <- newdata[[deparse(substitute(response))]]
 
-  tibble(
-    Model = model_name,
-    Accuracy  = accuracy_vec(truth = truth, estimate = preds_class),
-    Precision = precision_vec(truth = truth, estimate = preds_class),
-    Recall    = recall_vec(truth = truth, estimate = preds_class),
-    AUC       = roc_auc_vec(truth = truth, estimate = preds_prob, event_level = "second")
-  )
+ 
 }
 ```
 
 The three best performing models are the XGBoost, Random Forest, and SVM model. 
-Out of these three, I would say that the XGBoost performed the best. They
+Out of these three, I would say that the Forest performed the best. They
 have the best accuracy as well as the best area under the ROC curve.
 
 The variable and permutation importance for those three models are as follows:
@@ -565,21 +555,19 @@ varImp(rf_sub_model)
 
 explainer <- explain(
   model = svm_sub_model,
-  data = smote_test |> select(-playoff, -team),  # your test features
-  y = smote_test$playoff,
+  data = smote_sub_test |> select(-playoff, -team),
+  y = as.numeric(smote_sub_test$playoff == "True"),  # <- FIX here
   label = "SVM"
 )
 
-# Calculate variable importance
+# Now you can run model_parts
 vi <- model_parts(explainer)
 plot(vi)
-
-
 ```
 
 
 #### Conclusion
-It seems as though the XGBoost was the best model at classifying which four 
+It seems as though the Random Forest was the best model at classifying which four 
 teams made it to the playoffs. Through PCA and correlation analysis, seasonal 
 data can be shrunk and give a good explanation to who would make it to the 
 playoff. It does appear that strength of schedule is a powerful factor into the

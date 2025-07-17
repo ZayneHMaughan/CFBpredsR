@@ -538,13 +538,7 @@ get_metrics <- function(model, newdata, response, model_name) {
 
   truth <- newdata[[deparse(substitute(response))]]
 
-  tibble(
-    Model = model_name,
-    Accuracy = accuracy_vec(truth = truth, estimate = preds_class),
-    Precision = precision_vec(truth = truth, estimate = preds_class),
-    Recall = recall_vec(truth = truth, estimate = preds_class),
-    AUC = roc_auc_vec(truth = truth, estimate = preds_prob, event_level = "second")
-  )
+ 
 }
 ```
 
